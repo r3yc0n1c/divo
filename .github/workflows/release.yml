@@ -5,58 +5,73 @@ on:
     tags:
       - "v*.*.*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    name: Build Binaries
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
         goos: [linux, windows, darwin]
         goarch: [amd64]
+        include:
+          - goos: windows
+            ext: .exe
+          - goos: linux
+            ext: ""
+          - goos: darwin
+            ext: ""
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.24.5"
+          go-version: 1.21
 
-      - name: Build binary into ./bin
+      - name: Get release tag (e.g. v1.0.0)
+        id: tag
+        run: echo "RELEASE_TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+
+      - name: Build and Zip
         run: |
           mkdir -p bin
-          EXT=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
-            -o bin/divo-${{ matrix.goos }}-${{ matrix.goarch }}$EXT ./cmd/divo
+          BIN_NAME="divo-${RELEASE_TAG}-${{ matrix.goos }}"
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+          go build -o bin/divo${{ matrix.ext }} ./cmd/divo
+          cd bin
+          zip -r "${BIN_NAME}.zip" "divo${{ matrix.ext }}"
+          cd ..
 
-      - name: Upload artifact
+      - name: Upload zipped binary
         uses: actions/upload-artifact@v4
         with:
-          name: divo-binaries
-          path: bin/
-          retention-days: 7
+          name: divo-${{ matrix.goos }}
+          path: bin/divo-${{ env.RELEASE_TAG }}-${{ matrix.goos }}.zip
 
   release:
-    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Download build artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: divo-binaries
-          path: bin
+          path: bin/
+          merge-multiple: true
+          extract: false
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Generate checksums
+        run: |
+          cd bin
+          sha256sum *.zip > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          files: bin/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            bin/*.zip
+            bin/checksums.txt
